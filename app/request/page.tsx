@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 type Estimate = {
@@ -10,11 +10,26 @@ type Estimate = {
   caveat: string;
 };
 
+declare global {
+  interface Window {
+    google?: typeof google;
+  }
+}
+
 const URGENCY_OPTIONS = [
   { value: "before-next-guest", label: "Before next guest arrives" },
   { value: "this-week", label: "Sometime this week" },
   { value: "no-rush", label: "No rush — next available" },
 ];
+
+// Roughly bounds Kihei so autocomplete suggestions favor local addresses
+// without strictly blocking anything outside it.
+const KIHEI_BOUNDS = {
+  north: 20.79,
+  south: 20.7,
+  east: -156.42,
+  west: -156.49,
+};
 
 export default function RequestPage() {
   const [description, setDescription] = useState("");
@@ -24,12 +39,59 @@ export default function RequestPage() {
   const [urgency, setUrgency] = useState(URGENCY_OPTIONS[0].value);
   const [photos, setPhotos] = useState<string[]>([]);
 
+  const addressInputRef = useRef<HTMLInputElement>(null);
+
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [estimateError, setEstimateError] = useState<string | null>(null);
   const [estimating, setEstimating] = useState(false);
 
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Load the Google Maps Places script once and wire up autocomplete on
+  // the address field. If no API key is configured, the field just behaves
+  // like a normal text input.
+  useEffect(() => {
+    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+    if (!apiKey || !addressInputRef.current) return;
+
+    function initAutocomplete() {
+      if (!window.google?.maps?.places || !addressInputRef.current) return;
+      const autocomplete = new window.google.maps.places.Autocomplete(
+        addressInputRef.current,
+        {
+          fields: ["formatted_address"],
+          componentRestrictions: { country: "us" },
+          bounds: KIHEI_BOUNDS,
+        }
+      );
+      autocomplete.addListener("place_changed", () => {
+        const place = autocomplete.getPlace();
+        if (place.formatted_address) {
+          setAddress(place.formatted_address);
+        }
+      });
+    }
+
+    if (window.google?.maps?.places) {
+      initAutocomplete();
+      return;
+    }
+
+    const existingScript = document.getElementById("google-maps-script");
+    if (existingScript) {
+      existingScript.addEventListener("load", initAutocomplete);
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.id = "google-maps-script";
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
+    script.async = true;
+    script.onload = initAutocomplete;
+    document.head.appendChild(script);
+  }, []);
 
   async function handlePhotoUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []).slice(0, 4 - photos.length);
@@ -74,19 +136,33 @@ export default function RequestPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
-    // TODO: wire to Firestore once backend is connected.
-    console.log("Repair request submitted:", {
-      propertyName,
-      address,
-      contact,
-      urgency,
-      description,
-      photoCount: photos.length,
-      estimate,
-    });
-    await new Promise((r) => setTimeout(r, 600));
-    setSubmitting(false);
-    setSubmitted(true);
+    setSubmitError(null);
+    try {
+      const res = await fetch("/api/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          propertyName,
+          address,
+          contact,
+          urgency,
+          description,
+          photos,
+          estimate,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSubmitError(data.error ?? "Something went wrong submitting your request.");
+        setSubmitting(false);
+        return;
+      }
+      setSubmitted(true);
+    } catch {
+      setSubmitError("Couldn't reach the server. Check your connection and try again.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   if (submitted) {
@@ -150,10 +226,12 @@ export default function RequestPage() {
             </Field>
             <Field label="Address in Kihei">
               <input
+                ref={addressInputRef}
                 required
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
-                placeholder="Street address"
+                placeholder="Start typing your address…"
+                autoComplete="off"
                 className={inputClasses}
               />
             </Field>
@@ -274,6 +352,10 @@ export default function RequestPage() {
               </div>
             )}
           </div>
+
+          {submitError && (
+            <p className="font-body text-sm text-rust">{submitError}</p>
+          )}
 
           <button
             type="submit"
