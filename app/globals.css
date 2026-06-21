@@ -37,3 +37,16 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* Google Places autocomplete web component */
+gmp-place-autocomplete {
+  --gmpx-color-surface: var(--sand);
+  --gmpx-color-on-surface: var(--shadow-green);
+  --gmpx-font-family-base: var(--font-body);
+  width: 100%;
+}
+
+/* In case the legacy dropdown is ever in play, keep it above other content */
+.pac-container {
+  z-index: 9999 !important;
+}

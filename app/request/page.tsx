@@ -22,15 +22,6 @@ const URGENCY_OPTIONS = [
   { value: "no-rush", label: "No rush — next available" },
 ];
 
-// Roughly bounds Kihei so autocomplete suggestions favor local addresses
-// without strictly blocking anything outside it.
-const KIHEI_BOUNDS = {
-  north: 20.79,
-  south: 20.7,
-  east: -156.42,
-  west: -156.49,
-};
-
 export default function RequestPage() {
   const [description, setDescription] = useState("");
   const [propertyName, setPropertyName] = useState("");
@@ -39,7 +30,8 @@ export default function RequestPage() {
   const [urgency, setUrgency] = useState(URGENCY_OPTIONS[0].value);
   const [photos, setPhotos] = useState<string[]>([]);
 
-  const addressInputRef = useRef<HTMLInputElement>(null);
+  const addressContainerRef = useRef<HTMLDivElement>(null);
+  const [mapsAvailable, setMapsAvailable] = useState(false);
 
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [estimateError, setEstimateError] = useState<string | null>(null);
@@ -49,28 +41,39 @@ export default function RequestPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Load the Google Maps Places script once and wire up autocomplete on
-  // the address field. If no API key is configured, the field just behaves
-  // like a normal text input.
+  // Load the Google Maps Places script once and mount the new
+  // PlaceAutocompleteElement web component into the address field's
+  // container. The older `Autocomplete` widget is deprecated for any
+  // Places API enabled after March 2025, so this uses its replacement.
+  // If no API key is configured, the field falls back to a plain text input.
   useEffect(() => {
     const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-    if (!apiKey || !addressInputRef.current) return;
+    if (!apiKey || !addressContainerRef.current) return;
 
     function initAutocomplete() {
-      if (!window.google?.maps?.places || !addressInputRef.current) return;
-      const autocomplete = new window.google.maps.places.Autocomplete(
-        addressInputRef.current,
-        {
-          fields: ["formatted_address"],
-          componentRestrictions: { country: "us" },
-          bounds: KIHEI_BOUNDS,
-        }
-      );
-      autocomplete.addListener("place_changed", () => {
-        const place = autocomplete.getPlace();
-        if (place.formatted_address) {
-          setAddress(place.formatted_address);
-        }
+      const container = addressContainerRef.current;
+      const placesLib = window.google?.maps?.places as
+        | (typeof google.maps.places & {
+            PlaceAutocompleteElement?: new (opts?: object) => HTMLElement;
+          })
+        | undefined;
+      if (!placesLib?.PlaceAutocompleteElement || !container) return;
+      if (container.childElementCount > 0) return; // already mounted
+
+      const placeAutocomplete = new placesLib.PlaceAutocompleteElement({
+        includedRegionCodes: ["us"],
+      });
+      placeAutocomplete.classList.add("w-full");
+      container.appendChild(placeAutocomplete);
+      setMapsAvailable(true);
+
+      placeAutocomplete.addEventListener("gmp-select", async (event: Event) => {
+        const detail = event as unknown as {
+          placePrediction: { toPlace: () => { fetchFields: (opts: object) => Promise<void>; formattedAddress?: string } };
+        };
+        const place = detail.placePrediction.toPlace();
+        await place.fetchFields({ fields: ["formattedAddress"] });
+        setAddress(place.formattedAddress ?? "");
       });
     }
 
@@ -87,7 +90,7 @@ export default function RequestPage() {
 
     const script = document.createElement("script");
     script.id = "google-maps-script";
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&loading=async`;
     script.async = true;
     script.onload = initAutocomplete;
     document.head.appendChild(script);
@@ -135,6 +138,10 @@ export default function RequestPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!address.trim()) {
+      setSubmitError("Please select or enter your address.");
+      return;
+    }
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -225,15 +232,16 @@ export default function RequestPage() {
               />
             </Field>
             <Field label="Address in Kihei">
-              <input
-                ref={addressInputRef}
-                required
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder="Start typing your address…"
-                autoComplete="off"
-                className={inputClasses}
-              />
+              <div ref={addressContainerRef} className={mapsAvailable ? "gmp-field" : "hidden"} />
+              {!mapsAvailable && (
+                <input
+                  required
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                  placeholder="Street address"
+                  className={inputClasses}
+                />
+              )}
             </Field>
           </div>
 
