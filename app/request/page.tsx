@@ -90,7 +90,7 @@ export default function RequestPage() {
 
     const script = document.createElement("script");
     script.id = "google-maps-script";
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&loading=async`;
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&v=beta&loading=async`;
     script.async = true;
     script.onload = initAutocomplete;
     document.head.appendChild(script);
